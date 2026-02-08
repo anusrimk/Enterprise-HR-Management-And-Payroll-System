@@ -1,0 +1,313 @@
+================================================================================
+                                 HR MANAGEMENT API - GUIDE
+                    (Routes, Services, Models, Controllers, Logic Flow)
+================================================================================
+
+This file explains each and every part of the project so that anyone (including
+beginners) can understand how the code works, where the logic lives, and how
+APIs flow from request to response.
+
+
+--------------------------------------------------------------------------------
+1. HOW THE APPLICATION STARTS
+--------------------------------------------------------------------------------
+
+  server.js (entry point)
+       |
+       |  1. Loads .env (PORT, MONGO_URI)
+       |  2. Connects to MongoDB (config/db.js)
+       |  3. Starts Express app (app.js) on PORT (e.g. 5001)
+       |
+  app.js
+       |
+       |  - Uses cors (allow frontend to call API)
+       |  - Uses express.json() (read JSON body)
+       |  - Mounts 5 route groups under /api/...
+       |  - Uses error middleware at the end (catch all errors)
+       |
+       +--> /api/employees  --> employee.routes.js
+       +--> /api/attendance --> attendance.routes.js
+       +--> /api/payroll    --> payroll.routes.js
+       +--> /api/leaves     --> leave.routes.js
+       +--> /api/dashboard  --> dashboard.routes.js
+
+
+--------------------------------------------------------------------------------
+2. REQUEST FLOW (EVERY API REQUEST FOLLOWS THIS)
+--------------------------------------------------------------------------------
+
+  HTTP Request (e.g. POST /api/employees with JSON body)
+       |
+       v
+  ROUTES (e.g. employee.routes.js)
+       |  Job: Decide which controller function to run based on URL + method
+       v
+  CONTROLLER (e.g. employee.controller.js)
+       |  Job: Read req.body / req.params / req.query, call SERVICE, send res
+       v
+  SERVICE (e.g. employee.service.js)
+       |  Job: Business logic, talk to database via MODEL
+       v
+  MODEL (e.g. Employee.js)
+       |  Job: Define collection structure (schema), save/read from MongoDB
+       v
+  MongoDB (database)
+
+  Response goes back: Controller -> res.json(...) -> Client
+
+
+--------------------------------------------------------------------------------
+3. FOLDER STRUCTURE (WHAT EACH FOLDER DOES)
+--------------------------------------------------------------------------------
+
+  src/
+  ├── config/         Settings: DB connection, constants (enums, PORT)
+  ├── models/         Database schemas (what data we store)
+  ├── routes/         URL + HTTP method -> which controller to call
+  ├── controllers/    Handle request/response, call services
+  ├── services/       Business logic, use models to read/write DB
+  ├── middlewares/    Run before/after routes (e.g. error handler)
+  ├── utils/          Helper functions (e.g. payroll math)
+  ├── app.js          Express app setup and route mounting
+  └── server.js       Start server + connect DB
+
+
+--------------------------------------------------------------------------------
+4. CONFIG FILES
+--------------------------------------------------------------------------------
+
+  config/db.js
+  - connectDB() connects to MongoDB using process.env.MONGO_URI.
+  - Called once when the app starts (from server.js).
+
+  config/constants.js
+  - PORT, NODE_ENV
+  - EMPLOYEE_STATUS: ACTIVE, INACTIVE, RESIGNED
+  - ATTENDANCE_STATUS: PRESENT, ABSENT, HALF_DAY, LEAVE, HOLIDAY, WEEK_OFF
+  - PAYROLL_STATUS: GENERATED, PAID
+  - DEFAULT_WORKING_DAYS_PER_MONTH: 22
+  - LEAVE_TYPES: SICK, CASUAL, ANNUAL, UNPAID, MATERNITY, PATERNITY
+  - LEAVE_REQUEST_STATUS: PENDING, APPROVED, REJECTED, CANCELLED
+  - Models and services use these so we don't repeat magic strings.
+
+
+--------------------------------------------------------------------------------
+5. MODELS (DATABASE SCHEMAS - WHAT WE STORE)
+--------------------------------------------------------------------------------
+
+  Employee (models/Employee.js)
+  - name, email (unique), department, designation, joiningDate, salary, status
+  - status default: ACTIVE (from constants)
+
+  Attendance (models/Attendance.js)
+  - employeeId (ref Employee), date, status (PRESENT, ABSENT, etc.)
+  - One record per employee per day (unique index on employeeId + date)
+
+  Payroll (models/Payroll.js)
+  - employeeId, month, year, workingDays, presentDays, absentDays,
+    perDaySalary, payableSalary, status (default GENERATED)
+
+  Leave (models/Leave.js)
+  - employeeId, leaveType, startDate, endDate, days, reason, status,
+    approvedBy, approvedAt
+  - status default: PENDING
+
+  Salary (models/Salary.js)
+  - Used for salary history; not used by current API routes.
+
+
+--------------------------------------------------------------------------------
+6. ROUTES (EVERY API ENDPOINT - URL + METHOD -> CONTROLLER)
+--------------------------------------------------------------------------------
+
+  EMPLOYEES (base: /api/employees)
+  - POST   /              --> addEmployee          (body: name, email, department, designation, joiningDate, salary)
+  - GET    /              --> getEmployees         (list all)
+  - GET    /:id           --> getEmployeeById      (params: id)
+
+  ATTENDANCE (base: /api/attendance)
+  - POST   /mark          --> markAttendance       (body: employeeId, date, status)
+  - GET    /:employeeId   --> getEmployeeAttendance (params: employeeId)
+
+  PAYROLL (base: /api/payroll)
+  - POST   /generate      --> generatePayroll      (body: employeeId, month, year)
+  - GET    /:employeeId   --> getEmployeePayroll   (params: employeeId)
+
+  LEAVES (base: /api/leaves)
+  - POST   /                    --> createLeave       (body: employeeId, leaveType, startDate, endDate, days, reason?)
+  - GET    /                    --> getAllLeaves      (query: status?, employeeId?)
+  - GET    /employee/:employeeId --> getLeavesByEmployee
+  - GET    /:id                 --> getLeaveById
+  - PUT    /:id                 --> updateLeave      (body: e.g. status: APPROVED)
+
+  DASHBOARD (base: /api/dashboard)
+  - GET    /overview      --> getOverview         (returns totalEmployees, presentToday)
+
+
+--------------------------------------------------------------------------------
+7. CONTROLLERS (WHAT EACH ONE DOES - REQUEST IN, RESPONSE OUT)
+--------------------------------------------------------------------------------
+
+  employee.controller.js
+  - addEmployee:     calls employeeService.createEmployee(req.body), returns { message, employee }
+  - getEmployees:    calls employeeService.getAllEmployees(), returns array
+  - getEmployeeById: calls employeeService.getEmployeeById(id), returns 404 if not found, else employee
+
+  attendance.controller.js
+  - markAttendance:        calls attendanceService.markAttendance(req.body), returns { message, attendance }
+  - getEmployeeAttendance: calls attendanceService.getByEmployee(employeeId), returns array
+
+  payroll.controller.js
+  - generatePayroll:   finds Employee by id; if not found 404; else calls payrollService.runPayroll(employee, month, year), returns { message, payroll }
+  - getEmployeePayroll: calls payrollService.getEmployeePayroll(employeeId), returns array
+
+  leave.controller.js
+  - createLeave:        calls leaveService.create(req.body), returns { message, leave }
+  - getAllLeaves:       builds filter from query (status, employeeId), calls leaveService.findAll(filter), returns array
+  - getLeavesByEmployee: leaveService.findByEmployee(employeeId), returns array
+  - getLeaveById:       leaveService.findById(id), 404 if not found, else leave
+  - updateLeave:        leaveService.updateById(id, req.body), 404 if not found, else updated leave
+
+  dashboard.controller.js
+  - getOverview: calls dashboardService.getOverview(), returns { totalEmployees, presentToday }
+
+
+--------------------------------------------------------------------------------
+8. SERVICES (BUSINESS LOGIC - THE BRAIN OF EACH MODULE)
+--------------------------------------------------------------------------------
+
+  employee.service.js
+  - createEmployee(data)   --> Employee.create(data)
+  - getAllEmployees()      --> Employee.find()
+  - getEmployeeById(id)    --> Employee.findById(id)
+
+  attendance.service.js
+  - markAttendance(data)   --> Attendance.create(data)
+  - getByEmployee(employeeId) --> Attendance.find({ employeeId }).sort({ date: -1 })
+
+  payroll.service.js
+  - runPayroll(employee, month, year):
+      1. workingDays = 22 (from constants)
+      2. Get all attendance for this employee: Attendance.find({ employeeId })
+      3. Count how many have status === "PRESENT" --> presentDays
+      4. absentDays = workingDays - presentDays
+      5. calculatePayroll(employee.salary, workingDays, presentDays) --> perDaySalary, payableSalary (from utils/payrollCalculator.js)
+      6. Payroll.create({ employeeId, month, year, workingDays, presentDays, absentDays, perDaySalary, payableSalary })
+      7. Return the created payroll
+  - getEmployeePayroll(employeeId) --> Payroll.find({ employeeId }).sort({ year: -1, month: -1 })
+
+  leave.service.js
+  - create(data)           --> Leave.create(data)
+  - findAll(filter)        --> Leave.find(filter).populate("employeeId").sort({ createdAt: -1 })
+  - findByEmployee(id)     --> Leave.find({ employeeId }).sort({ startDate: -1 })
+  - findById(id)            --> Leave.findById(id).populate("employeeId")
+  - updateById(id, data)    --> Leave.findByIdAndUpdate(id, data, { new: true })
+  - getLeaveDaysInMonth(employeeId, year, month) --> (used for advanced payroll; not used by current API)
+
+  dashboard.service.js
+  - getOverview():
+      1. totalEmployees = Employee.countDocuments()
+      2. today = start of today, tomorrow = start of next day
+      3. presentToday = Attendance.countDocuments({ date between today and tomorrow, status: "PRESENT" })
+      4. return { totalEmployees, presentToday }
+
+
+--------------------------------------------------------------------------------
+9. LOGIC FLOW FOR EACH MAIN FEATURE (STEP BY STEP)
+--------------------------------------------------------------------------------
+
+  ADD EMPLOYEE
+  - Client: POST /api/employees with { name, email, department, designation, joiningDate, salary }
+  - Route: post("/", controller.addEmployee)
+  - Controller: employeeService.createEmployee(req.body)
+  - Service: Employee.create(data) --> saves to MongoDB
+  - Response: { message: "Employee added successfully", employee }
+
+  MARK ATTENDANCE
+  - Client: POST /api/attendance/mark with { employeeId, date, status }
+  - Route: post("/mark", controller.markAttendance)
+  - Controller: attendanceService.markAttendance(req.body)
+  - Service: Attendance.create(data)
+  - Response: { message: "Attendance marked successfully", attendance }
+
+  GENERATE PAYROLL (MOST LOGIC)
+  - Client: POST /api/payroll/generate with { employeeId, month, year }
+  - Route: post("/generate", controller.generatePayroll)
+  - Controller: find Employee by employeeId; if not found 404; else payrollService.runPayroll(employee, month, year)
+  - Service (runPayroll):
+      1. workingDays = 22
+      2. Get attendance for employee
+      3. Count PRESENT days --> presentDays
+      4. absentDays = 22 - presentDays
+      5. perDaySalary = salary / 22, payableSalary = perDaySalary * presentDays (via utils/payrollCalculator.js)
+      6. Save Payroll document with all these values
+  - Response: { message: "Payroll generated successfully", payroll }
+
+  DASHBOARD OVERVIEW
+  - Client: GET /api/dashboard/overview
+  - Route: get("/overview", controller.getOverview)
+  - Controller: dashboardService.getOverview()
+  - Service: count total employees; count attendance where date is today and status PRESENT
+  - Response: { totalEmployees, presentToday }
+
+
+--------------------------------------------------------------------------------
+10. MIDDLEWARES
+--------------------------------------------------------------------------------
+
+  error.middleware.js
+  - Runs after all routes. If any controller or service throws an error, Express
+    sends the request here.
+  - It logs the error and responds with: res.status(500).json({ success: false, message: err.message })
+
+
+--------------------------------------------------------------------------------
+11. UTILS
+--------------------------------------------------------------------------------
+
+  utils/payrollCalculator.js
+  - calculatePayroll(salary, workingDays, presentDays)
+  - Returns { perDaySalary, payableSalary } (rounded to 2 decimals).
+  - Used by payroll.service.runPayroll().
+
+
+--------------------------------------------------------------------------------
+12. HOW TO RUN AND TEST
+--------------------------------------------------------------------------------
+
+  - Put in .env: PORT=5001, MONGO_URI=mongodb://localhost:27017/hr
+  - Start MongoDB locally.
+  - Run server: npm start   (or node src/server.js)
+  - Server runs on http://localhost:5001 (or PORT from .env)
+
+  Test all APIs: node test-apis.js
+  - This script starts the app on a random port, creates one employee, marks
+    attendance, generates payroll, creates/updates leave, and checks dashboard.
+  - You should see: Total: 15/15 passed
+
+
+--------------------------------------------------------------------------------
+13. QUICK REFERENCE - ALL APIs IN ONE LIST
+--------------------------------------------------------------------------------
+
+  GET    /api/employees              List all employees
+  POST   /api/employees              Add employee (body: name, email, department, designation, joiningDate, salary)
+  GET    /api/employees/:id          Get one employee
+
+  POST   /api/attendance/mark        Mark attendance (body: employeeId, date, status)
+  GET    /api/attendance/:employeeId Get attendance for one employee
+
+  POST   /api/payroll/generate       Generate payroll (body: employeeId, month, year)
+  GET    /api/payroll/:employeeId    Get payroll list for one employee
+
+  POST   /api/leaves                 Create leave (body: employeeId, leaveType, startDate, endDate, days, reason?)
+  GET    /api/leaves                 List leaves (query: status?, employeeId?)
+  GET    /api/leaves/employee/:id    Leaves for one employee
+  GET    /api/leaves/:id             Get one leave
+  PUT    /api/leaves/:id             Update leave (e.g. approve: body: { status: "APPROVED" })
+
+  GET    /api/dashboard/overview     Get totalEmployees and presentToday
+
+================================================================================
+                              END OF READ
+================================================================================
